@@ -216,19 +216,34 @@ class GeminiAgent(BaseAgent):
             formatted_history.append({"role": role, "parts": [{"text": item["content"]}]})
 
         # The current prompt is the latest message from the user.
-        messages = formatted_history + [{"role": "user", "parts": [{"text": prompt}]}]
+        user_prompt = {"role": "user", "parts": [{"text": prompt}]}
+
+        # CORRECTED: System instruction is now the first part of the 'contents' list.
+        system_instruction = {
+            "role": "user",
+            "parts": [{"text": FILE_CREATION_INSTRUCTION}]
+        }
+
+        # Start with the system instruction, then history, then the current prompt.
+        # Note: The API expects alternating user/model roles. A system instruction is considered a 'user' role message.
+        # To maintain conversation flow, we place the system prompt, then the user prompt, then the history.
+        # A more robust solution might merge history intelligently. For a direct fix, this works.
+        # A simple approach is to have the system message, then the history, then the new prompt.
+        messages = [system_instruction] + formatted_history + [user_prompt]
+
 
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": messages,
-            "system_instruction": {"parts": [{"text": FILE_CREATION_INSTRUCTION}]},
             "generationConfig": {
                 "temperature": 0.7,
                 "topP": 1.0,
                 "maxOutputTokens": 8192,
             }
         }
+
+        # The 'system_instruction' key is removed from the payload.
 
         try:
             response = requests.post(api_url, headers=headers, json=payload, timeout=120)
@@ -243,7 +258,11 @@ class GeminiAgent(BaseAgent):
             return self.process_response(text_response)
 
         except requests.exceptions.RequestException as e:
-            fail(f"API request to Gemini failed: {e}")
+            # Enhanced error reporting to provide more context
+            error_details = f"API request to Gemini failed: {e}"
+            if e.response is not None:
+                error_details += f"\nResponse body: {e.response.text}"
+            fail(error_details)
         except (KeyError, IndexError) as e:
             fail(f"Failed to parse Gemini API response: {e}. Full response: {response.text}")
 
