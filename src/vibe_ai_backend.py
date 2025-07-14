@@ -368,12 +368,19 @@ def main():
     except (json.JSONDecodeError, ValueError) as e:
         fail(f"Invalid --history argument: {e}")
 
-    full_prompt = args.prompt
-    if args.files:
-        full_prompt = read_files_for_prompt(args.files) + "\n--- USER PROMPT ---\n" + args.prompt
+    # --- Prepare Prompt and Context ---
+    context_parts = []
     if args.tree:
-        full_prompt = read_tree_for_prompt(args.tree) + "\n--- USER PROMPT ---\n" + args.prompt
+        context_parts.append(read_tree_for_prompt(args.tree))
+    if args.files:
+        context_parts.append(read_files_for_prompt(args.files))
 
+    full_prompt = args.prompt
+    if context_parts:
+        full_context = "\n".join(context_parts)
+        full_prompt = f"{full_context}\n--- USER PROMPT ---\n{args.prompt}"
+
+    # --- Agent Selection and Instantiation ---
     agent_map = {
         'gemini': ('GEMINI_API_KEY', GeminiAgent, GeminiAgent.MODEL_FLASH),
         'claude': ('ANTHROPIC_API_KEY', ClaudeAgent, ClaudeAgent.MODEL_HAIKU),

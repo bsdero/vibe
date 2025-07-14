@@ -2,7 +2,7 @@
 " Filename: plugin/vibe.vim
 " Author: bsdero/Gemini
 " Description: A Vim plugin frontend for the vibe_ai_backend.py script.
-" Version: 3.2 - Final Parameter Update
+" Version: 3.3 - Critical Bugfix for process_response
 " =============================================================================
 
 " --- Load Guard & Prerequisite Checks ---
@@ -168,6 +168,13 @@ class VibePlugin:
         
         for file_obj in response_json.get("files", []):
             cls._prompt_for_file_creation(file_obj)
+
+    @classmethod
+    def process_response(cls, exit_code, stdout_data, stderr_data, params):
+        if exit_code == 0 and stdout_data:
+            cls.handle_success(stdout_data, params)
+        else:
+            cls.handle_error(stderr_data or f"Backend exited with code {exit_code} and no output.")
 
     @classmethod
     def handle_error(cls, stderr_data):
