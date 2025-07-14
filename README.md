@@ -1,6 +1,6 @@
-# Vibe AI for Vim
+# Vibe Programming for VIM 
 
-Vibe AI is a modern, asynchronous Vim plugin that connects your favorite editor to powerful generative AI models. It acts as a seamless frontend for a robust Python backend, allowing you to ask questions, refactor code, generate files, and analyze entire projects without ever leaving Vim.
+Vibe is a modern, asynchronous Vim plugin that connects your favorite editor to powerful generative AI models. It acts as a seamless frontend for a robust Python backend, allowing you to ask questions, refactor code, generate files, and analyze entire projects without ever leaving Vim.
 
 The plugin is designed to be non-blocking, so your UI will never freeze, even during long-running AI requests. It was vibecoded by me and Gemini.
 
