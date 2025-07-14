@@ -31,17 +31,17 @@ Installation involves two main steps: setting up the backend script and installi
 
 #### 1. Install the Backend
 
-First, place the `vibe_ai_agent.py` script in a permanent location and make it executable.
+First, place the `vibe_ai_backend.py` script in a permanent location and make it executable.
 
 ```bash
 # Create a directory for the backend
 mkdir -p ~/.config/vibe-ai
 
 # Move the script to the new directory
-mv /path/to/your/vibe_ai_agent.py ~/.config/vibe-ai/
+mv /path/to/your/vibe_ai_backend.py ~/.config/vibe-ai/
 
 # Make the script executable
-chmod +x ~/.config/vibe-ai/vibe_ai_agent.py
+chmod +x ~/.config/vibe-ai/vibe_ai_backend.py
 ```
 
 Install the required Python library:
@@ -69,7 +69,7 @@ Add the following configuration to your `.vimrc` (for Vim) or `init.vim` (for Ne
 
 ```vim
 " REQUIRED: The absolute path to your backend script
-let g:vibe_ai_backend_path = expand('~/.config/vibe-ai/vibe_ai_agent.py')
+let g:vibe_ai_backend_path = expand('~/.config/vibe-ai/vibe_ai_backend.py')
 
 " OPTIONAL: Set your preferred default AI agent
 let g:vibe_ai_default_agent = 'gemini' " Options: 'gemini', 'claude', 'openai', 'ollama'
@@ -82,8 +82,13 @@ let g:vibe_ai_default_agent = 'gemini' " Options: 'gemini', 'claude', 'openai', 
 " let g:vibe_ai_top_p = 1.0
 " let g:vibe_ai_top_k = 40
 " let g:vibe_ai_max_tokens = 4096
-" let g:vibe_ai_context_size = 8192 " (Ollama only)
 " let g:vibe_ai_system_prompt = 'You are a helpful assistant who always responds in rhyme.'
+
+" --- Optional Ollama Configuration ---
+" let g:vibe_ai_ollama_host = '127.0.0.1'
+" let g:vibe_ai_ollama_port = 11434
+" let g:vibe_ai_context_size = 8192 " (Ollama only)
+" let g:vibe_ai_num_thread = 4 " (Ollama only)
 
 " OPTIONAL: Enable debug messages for troubleshooting
 " let g:vibe_ai_debug = 1
@@ -110,7 +115,7 @@ Remember to restart your shell or run `source ~/.bashrc` for the change to take 
 
 ##### For Ollama
 
-No API key is needed. Just make sure the Ollama server is running on your machine. You must also pull the model you intend to use.
+No API key is needed. Just make sure the Ollama server is running on your machine. You can configure the host and port in your `.vimrc` (see above) if it's not running on the default `localhost:11434`.
 
 ```bash
 # Make sure the server is running (it may start automatically with the app)
@@ -170,7 +175,7 @@ All commands have a full name and a shorter, three-character alias prefixed with
 This project is composed of two main files:
 
 * **`plugin/vibe.vim`**: The Vimscript and Python code that provides the Vim commands, manages the user interface, and handles asynchronous communication.
-* **`vibe_ai_agent.py`**: A stateless Python command-line script that takes a prompt and other arguments, communicates with the AI service provider, and returns a JSON response.
+* **`vibe_ai_backend.py`**: A stateless Python command-line script that takes a prompt and other arguments, communicates with the AI service provider, and returns a JSON response.
 
 This separation of concerns ensures that the Vim plugin remains lightweight and responsive, while the heavy lifting of API communication is delegated to a dedicated backend process.
 

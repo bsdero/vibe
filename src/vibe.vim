@@ -2,7 +2,7 @@
 " Filename: plugin/vibe.vim
 " Author: bsdero/Gemini
 " Description: A Vim plugin frontend for the vibe_ai_backend.py script.
-" Version: 3.0 - Parameter & Alias Update
+" Version: 3.2 - Final Parameter Update
 " =============================================================================
 
 " --- Load Guard & Prerequisite Checks ---
@@ -22,18 +22,21 @@ let g:vibe_ai_default_agent = get(g:, 'vibe_ai_default_agent', 'gemini')
 let g:vibe_ai_default_model = get(g:, 'vibe_ai_default_model', '')
 let g:vibe_ai_debug = get(g:, 'vibe_ai_debug', 0)
 
-" --- New Generation Parameters ---
+" --- Generation Parameters ---
 let g:vibe_ai_temperature = get(g:, 'vibe_ai_temperature', '')
 let g:vibe_ai_top_p = get(g:, 'vibe_ai_top_p', '')
 let g:vibe_ai_top_k = get(g:, 'vibe_ai_top_k', '')
 let g:vibe_ai_max_tokens = get(g:, 'vibe_ai_max_tokens', '')
 let g:vibe_ai_system_prompt = get(g:, 'vibe_ai_system_prompt', '')
 let g:vibe_ai_context_size = get(g:, 'vibe_ai_context_size', '')
+let g:vibe_ai_num_thread = get(g:, 'vibe_ai_num_thread', '')
+let g:vibe_ai_ollama_host = get(g:, 'vibe_ai_ollama_host', '')
+let g:vibe_ai_ollama_port = get(g:, 'vibe_ai_ollama_port', '')
 
 
 " --- Custom Commands ---
 command! -nargs=+ -range Vibeask <line1>,<line2>call vibe#run('ask', <q-args>, <range>)
-command! -nargs=+ Vba <line1>,<line2>call vibe#run('ask', <q-args>, <range>)
+command! -nargs=+ -range Vba <line1>,<line2>call vibe#run('ask', <q-args>, <range>)
 
 command! -nargs=+ -complete=file Vibefile call vibe#run('file', <q-args>, 0)
 command! -nargs=+ -complete=file Vbf call vibe#run('file', <q-args>, 0)
@@ -53,7 +56,7 @@ command! Vbd call vibe#debug_history()
 command! Vibefocus call vibe#focus_history()
 command! Vbo call vibe#focus_history()
 
-" --- New Parameter Management Commands ---
+" --- Parameter Management Commands ---
 command! -nargs=1 VibeSet call vibe#set_parameter(<q-args>)
 command! -nargs=1 Vbs call vibe#set_parameter(<q-args>)
 
@@ -69,7 +72,7 @@ command! -nargs=* Vbr call vibe#reset_settings(<q-args>)
 " =============================================================================
 
 function! s:on_exit(job_id, exit_code, params) abort
-  redraw! " Immediately clear the "thinking..." message
+  redraw!
   if g:vibe_ai_debug | echom "VIBE DEBUG: s:on_exit triggered." | endif
 
   if get(g:, 'vibe_job_was_cancelled', 0)
@@ -91,7 +94,6 @@ function! s:on_exit(job_id, exit_code, params) abort
   python3 << EOF
 import vim
 import json
-import textwrap
 
 IS_DEBUG = int(vim.eval("g:vibe_ai_debug"))
 
@@ -99,8 +101,6 @@ def debug_echo(message):
     if IS_DEBUG:
         escaped_message = str(message).replace("'", "''")
         vim.command(f"echom 'VIBE DEBUG: {escaped_message}'")
-
-debug_echo("Python block started successfully.")
 
 class VibePlugin:
     HISTORY_BUF_NAME = "vibe_history"
@@ -120,8 +120,7 @@ class VibePlugin:
         win_width = int(vim.eval("&columns / 3"))
         vim.command(f"rightbelow vertical {win_width} vnew")
         vim.command(f"file {cls.HISTORY_BUF_NAME}")
-        vim.command("setlocal buftype=nofile bufhidden=hide noswapfile nomodifiable")
-        vim.command("setlocal syntax=markdown")
+        vim.command("setlocal buftype=nofile bufhidden=hide noswapfile nomodifiable syntax=markdown")
         return int(vim.eval("bufnr('%')"))
 
     @classmethod
@@ -141,17 +140,10 @@ class VibePlugin:
         prompt_msg = f"Create file '{filename}'? [y/N]"
         choice = vim.eval(f"input('{cls._escape_for_vim(prompt_msg)} ')")
         if choice.lower() == 'y':
-            debug_echo(f"User confirmed creation for {filename}")
-            content = file_obj.get("content", "")
-            content_lines = content.split('\n')
-
-            # Use vim.eval to safely escape the filename for the :tabnew command
             safe_filename = vim.eval(f"fnameescape('{cls._escape_for_vim(filename)}')")
-            
-            # Execute commands to create the file in a new tab
             vim.command(f"tabnew {safe_filename}")
-            vim.current.buffer[:] = content_lines
-            vim.command(f"echom 'Vibe AI: Created file in new tab: {cls._escape_for_vim(filename)}'")
+            vim.current.buffer[:] = file_obj.get("content", "").split('\n')
+            vim.command(f"echom 'Vibe AI: Created file: {cls._escape_for_vim(filename)}'")
 
     @classmethod
     def _update_internal_history(cls, old_history, user_prompt, ai_response):
@@ -163,32 +155,19 @@ class VibePlugin:
 
     @classmethod
     def handle_success(cls, stdout_data, params):
-        debug_echo("Python handle_success called.")
         response_json = json.loads(stdout_data)
         bufnr = cls._find_or_create_history_buf()
         user_prompt = params.get("prompt", "")
         ai_response = response_json.get("response", "")
-        files_to_create = response_json.get("files", [])
         
         prompt_md = f"### You\n\n{user_prompt}\n\n---\n\n"
         response_md = f"### AI\n\n{ai_response}\n\n"
         
-        lines_to_append = (prompt_md + response_md).split('\n')
-        cls._append_to_buffer(bufnr, lines_to_append)
+        cls._append_to_buffer(bufnr, (prompt_md + response_md).split('\n'))
+        cls._update_internal_history(params['history'], user_prompt, ai_response)
         
-        cls._update_internal_history(
-            params['history'], user_prompt, ai_response
-        )
-        if files_to_create:
-            for file_obj in files_to_create:
-                cls._prompt_for_file_creation(file_obj)
-
-    @classmethod
-    def process_response(cls, exit_code, stdout_data, stderr_data, params):
-        if exit_code == 0 and stdout_data:
-            cls.handle_success(stdout_data, params)
-        else:
-            cls.handle_error(stderr_data or f"Backend exited with code {exit_code} and no output.")
+        for file_obj in response_json.get("files", []):
+            cls._prompt_for_file_creation(file_obj)
 
     @classmethod
     def handle_error(cls, stderr_data):
@@ -208,7 +187,7 @@ try:
     )
 except Exception as e:
     escaped_e = str(e).replace("'", "''")
-    vim.command(f"echohl ErrorMsg | echom 'Vibe AI: A critical Python error occurred: {escaped_e}' | echohl None")
+    vim.command(f"echohl ErrorMsg | echom 'Vibe AI Critical Error: {escaped_e}' | echohl None")
 EOF
 endfunction
 
@@ -254,6 +233,9 @@ function! vibe#run(command_type, args, range) abort
   if !empty(g:vibe_ai_max_tokens) | call add(l:cmd, '--max-tokens=' . g:vibe_ai_max_tokens) | endif
   if !empty(g:vibe_ai_system_prompt) | call add(l:cmd, '--system=' . g:vibe_ai_system_prompt) | endif
   if !empty(g:vibe_ai_context_size) | call add(l:cmd, '--context-size=' . g:vibe_ai_context_size) | endif
+  if !empty(g:vibe_ai_num_thread) | call add(l:cmd, '--num-thread=' . g:vibe_ai_num_thread) | endif
+  if !empty(g:vibe_ai_ollama_host) | call add(l:cmd, '--ollama-host=' . g:vibe_ai_ollama_host) | endif
+  if !empty(g:vibe_ai_ollama_port) | call add(l:cmd, '--ollama-port=' . g:vibe_ai_ollama_port) | endif
 
   let l:prompt = a:args
   if a:command_type ==# 'ask'
@@ -316,10 +298,9 @@ endfunction
 function! vibe#debug_history() abort
   if empty(get(g:, 'vibe_internal_history', [])) | echom "Vibe AI: No history to display." | return | endif
   vnew | file VibeDebugHistory
-  setlocal buftype=nofile bufhidden=hide noswapfile
+  setlocal buftype=nofile bufhidden=hide noswapfile nomodifiable readonly
   call setline(1, split(json_encode(g:vibe_internal_history), '\n'))
   silent %!python3 -m json.tool
-  setlocal nomodifiable readonly
 endfunction
 
 function! vibe#focus_history() abort
@@ -328,17 +309,29 @@ function! vibe#focus_history() abort
     echom "Vibe AI: No history to show yet. Run a command first."
     return
   endif
-
   let l:winid = bufwinid(l:bufnr)
   if l:winid != -1
     call win_gotoid(l:winid)
   else
-    let l:win_width = &columns / 3
-    execute 'rightbelow vertical ' . l:win_width . ' sbuffer ' . l:bufnr
+    execute 'rightbelow vertical ' . (&columns / 3) . ' sbuffer ' . l:bufnr
   endif
 endfunction
 
-" --- New Parameter Management Functions ---
+function! s:get_vibe_keys()
+    return {
+        \ 'agent': 'g:vibe_ai_default_agent',
+        \ 'model': 'g:vibe_ai_default_model',
+        \ 'temperature': 'g:vibe_ai_temperature',
+        \ 'top_p': 'g:vibe_ai_top_p',
+        \ 'top_k': 'g:vibe_ai_top_k',
+        \ 'max_tokens': 'g:vibe_ai_max_tokens',
+        \ 'system_prompt': 'g:vibe_ai_system_prompt',
+        \ 'context_size': 'g:vibe_ai_context_size',
+        \ 'num_thread': 'g:vibe_ai_num_thread',
+        \ 'ollama_host': 'g:vibe_ai_ollama_host',
+        \ 'ollama_port': 'g:vibe_ai_ollama_port'
+    \ }
+endfunction
 
 function! vibe#set_parameter(args) abort
   let l:parts = split(a:args, '=', 1)
@@ -349,70 +342,38 @@ function! vibe#set_parameter(args) abort
 
   let l:key = tolower(l:parts[0])
   let l:value = l:parts[1]
-  
-  let l:valid_keys = {
-  \ 'temperature': 'g:vibe_ai_temperature',
-  \ 'top_p': 'g:vibe_ai_top_p',
-  \ 'top_k': 'g:vibe_ai_top_k',
-  \ 'max_tokens': 'g:vibe_ai_max_tokens',
-  \ 'system_prompt': 'g:vibe_ai_system_prompt',
-  \ 'context_size': 'g:vibe_ai_context_size',
-  \ 'agent': 'g:vibe_ai_default_agent',
-  \ 'model': 'g:vibe_ai_default_model'
-  \ }
+  let l:valid_keys = s:get_vibe_keys()
 
   if !has_key(l:valid_keys, l:key)
     echohl ErrorMsg | echom "Vibe AI: Invalid key. Valid keys are: " . join(keys(l:valid_keys), ', ') | echohl None
     return
   endif
 
-  let l:var_name = l:valid_keys[l:key]
-  execute 'let ' . l:var_name . ' = ' . string(l:value)
+  execute 'let ' . l:valid_keys[l:key] . ' = ' . string(l:value)
   echom "Vibe AI: Set " . l:key . " = " . l:value
 endfunction
 
 function! vibe#get_settings() abort
   echom "--- Vibe AI Settings ---"
-  let l:settings = {
-  \ 'agent': g:vibe_ai_default_agent,
-  \ 'model': g:vibe_ai_default_model,
-  \ 'temperature': g:vibe_ai_temperature,
-  \ 'top_p': g:vibe_ai_top_p,
-  \ 'top_k': g:vibe_ai_top_k,
-  \ 'max_tokens': g:vibe_ai_max_tokens,
-  \ 'system_prompt': g:vibe_ai_system_prompt,
-  \ 'context_size': g:vibe_ai_context_size,
-  \ }
-  for [l:key, l:val] in items(l:settings)
+  for [l:key, l:var_name] in items(s:get_vibe_keys())
+    let l:val = eval(l:var_name)
     echom l:key . ': ' . (empty(l:val) ? '<not set>' : l:val)
   endfor
 endfunction
 
 function! vibe#reset_settings(args) abort
   let l:key_to_reset = tolower(a:args)
+  let l:valid_keys = s:get_vibe_keys()
   
-  let l:valid_keys = {
-  \ 'temperature': 'g:vibe_ai_temperature',
-  \ 'top_p': 'g:vibe_ai_top_p',
-  \ 'top_k': 'g:vibe_ai_top_k',
-  \ 'max_tokens': 'g:vibe_ai_max_tokens',
-  \ 'system_prompt': 'g:vibe_ai_system_prompt',
-  \ 'context_size': 'g:vibe_ai_context_size',
-  \ 'agent': 'g:vibe_ai_default_agent',
-  \ 'model': 'g:vibe_ai_default_model'
-  \ }
-
   if empty(l:key_to_reset)
-    " Reset all parameter settings
-    for l:var_name in values(l:valid_keys)
-      if l:var_name !=# 'g:vibe_ai_default_agent' " Don't reset the agent itself
+    for [l:key, l:var_name] in items(l:valid_keys)
+      if l:key !=# 'agent' " Don't reset the agent itself
         execute 'let ' . l:var_name . ' = ""'
       endif
     endfor
     echom "Vibe AI: All optional parameters have been reset."
   elseif has_key(l:valid_keys, l:key_to_reset)
-    let l:var_name = l:valid_keys[l:key_to_reset]
-    execute 'let ' . l:var_name . ' = ""'
+    execute 'let ' . l:valid_keys[l:key_to_reset] . ' = ""'
     echom "Vibe AI: Reset " . l:key_to_reset
   else
     echohl ErrorMsg | echom "Vibe AI: Invalid key to reset." | echohl None

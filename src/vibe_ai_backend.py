@@ -22,10 +22,6 @@ from typing import List, Dict, Any, Tuple, Optional
 
 # --- System-wide Instructions for the AI ---
 
-# This constant defines the instructions given to the AI regarding how to
-# format its response when it needs to create or modify a file.
-# The AI is instructed to use a specific marker format, which this script
-# is designed to parse.
 FILE_CREATION_INSTRUCTION = (
     "You are an expert programming assistant. When you need to create a new file "
     "or provide the full content for an existing file, you MUST use the following "
@@ -49,9 +45,6 @@ FILE_CREATION_INSTRUCTION = (
 def fail(message: str) -> None:
     """
     Prints a JSON error message to stderr and exits with a non-zero status.
-
-    Args:
-        message: The error message to report.
     """
     json.dump({"error": message}, sys.stderr, indent=2)
     sys.exit(1)
@@ -62,13 +55,6 @@ def fail(message: str) -> None:
 def read_files_for_prompt(file_paths: List[str]) -> str:
     """
     Reads the content of multiple files and formats it for the AI prompt.
-
-    Args:
-        file_paths: A list of paths to the files to read.
-
-    Returns:
-        A string containing the formatted content of all files, ready to be
-        prepended to the user's prompt.
     """
     if not file_paths:
         return ""
@@ -91,12 +77,6 @@ def read_files_for_prompt(file_paths: List[str]) -> str:
 def read_tree_for_prompt(root_dir: str) -> str:
     """
     Generates a directory tree structure and file contents for the AI prompt.
-
-    Args:
-        root_dir: The root directory to traverse.
-
-    Returns:
-        A string containing the formatted directory tree and file contents.
     """
     if not os.path.isdir(root_dir):
         fail(f"Directory not found: {root_dir}")
@@ -108,7 +88,6 @@ def read_tree_for_prompt(root_dir: str) -> str:
     ignore_files = {'.DS_Store'}
 
     for root, dirs, files in os.walk(root_dir):
-        # Modify dirs in-place to skip ignored directories
         dirs[:] = [d for d in dirs if d not in ignore_dirs]
 
         level = root.replace(root_dir, '').count(os.sep)
@@ -127,7 +106,6 @@ def read_tree_for_prompt(root_dir: str) -> str:
                     content = file_obj.read()
                     file_contents.append(f"--- START OF FILE: {os.path.relpath(file_path, root_dir)} ---\n{content}\n--- END OF FILE: {os.path.relpath(file_path, root_dir)} ---\n")
             except Exception:
-                # If a file can't be read (e.g., binary), we just append its path
                 file_contents.append(f"--- FILE: {os.path.relpath(file_path, root_dir)} (content not readable) ---\n")
 
     full_context = "\n".join(tree_representation) + "\n\n" + "\n".join(file_contents)
@@ -140,15 +118,12 @@ def read_tree_for_prompt(root_dir: str) -> str:
 class BaseAgent(ABC):
     """
     An abstract base class for different AI API agents.
-    It defines the common interface and implements shared functionality.
     """
     def __init__(self, api_key: Optional[str], model: str):
-        # API key is now optional, allowing for local agents like Ollama.
         if self.__class__.__name__ not in ['OllamaAgent'] and not api_key:
-            fail(f"API key for {self.__class__.__name__} is not set. Please set the corresponding environment variable.")
+            fail(f"API key for {self.__class__.__name__} is not set.")
         self.api_key = api_key
         self.model = model
-        # This regex is designed to find file creation markers and their code blocks.
         self.file_block_regex = re.compile(
             r"\[NEW_FILE:\s*(?P<filename>[\w\./\-\\]+)\]\s*\n?```(?:\w*\n)?(?P<content>.*?)```",
             re.DOTALL
@@ -158,33 +133,12 @@ class BaseAgent(ABC):
     def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
         """
         Sends a prompt and history to the AI and returns the response.
-
-        This method must be implemented by all concrete agent classes.
-
-        Args:
-            prompt: The user's prompt.
-            history: The conversation history.
-            params: A dictionary of generation parameters.
-
-        Returns:
-            A tuple containing:
-            - The conversational part of the AI's response.
-            - A list of file objects to be created.
         """
         pass
 
     def process_response(self, text: str) -> Tuple[str, List[Dict[str, str]]]:
         """
         Parses the AI's response to extract file creation blocks.
-
-        Args:
-            text: The raw text response from the AI.
-
-        Returns:
-            A tuple containing:
-            - The remaining conversational text (with file blocks removed).
-            - A list of file objects, where each object is a dictionary
-              with "filename" and "content" keys.
         """
         files_to_create = []
         matches = list(self.file_block_regex.finditer(text))
@@ -194,17 +148,13 @@ class BaseAgent(ABC):
             content = match.group('content').strip()
             files_to_create.append({"filename": filename, "content": content})
 
-        # Remove all matched file blocks from the original text to get the
-        # conversational part of the response.
         conversational_response = self.file_block_regex.sub('', text).strip()
-
         return conversational_response, files_to_create
 
 # --- Concrete Agent Implementations ---
 
 class GeminiAgent(BaseAgent):
     """Agent for interacting with the Google Gemini API."""
-
     MODEL_FLASH = "gemini-1.5-flash"
 
     def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
@@ -238,24 +188,16 @@ class GeminiAgent(BaseAgent):
             response = requests.post(api_url, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
-
-            if not data.get("candidates") or not data["candidates"][0].get("content"):
-                fail("Received an empty or invalid response from Gemini API.")
-
             text_response = data["candidates"][0]["content"]["parts"][0]["text"]
             return self.process_response(text_response)
         except requests.exceptions.RequestException as e:
-            error_details = f"API request to Gemini failed: {e}"
-            if e.response is not None:
-                error_details += f"\nResponse body: {e.response.text}"
-            fail(error_details)
+            fail(f"API request to Gemini failed: {e}")
         except (KeyError, IndexError) as e:
             fail(f"Failed to parse Gemini API response: {e}. Full response: {response.text}")
 
 
 class ClaudeAgent(BaseAgent):
     """Agent for interacting with the Anthropic Claude API."""
-
     MODEL_HAIKU = "claude-3-haiku-20240307"
 
     def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
@@ -279,7 +221,6 @@ class ClaudeAgent(BaseAgent):
             payload['top_p'] = params['top_p']
         if params.get('max_tokens') is not None:
             payload['max_tokens'] = params['max_tokens']
-        # BUG FIX: Removed unsupported 'top_k' parameter for Claude API.
 
         try:
             response = requests.post(api_url, headers=headers, json=payload, timeout=120)
@@ -295,7 +236,6 @@ class ClaudeAgent(BaseAgent):
 
 class OpenAIAgent(BaseAgent):
     """Agent for interacting with the OpenAI API."""
-
     MODEL_GPT4o_MINI = "gpt-4o-mini"
 
     def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
@@ -334,13 +274,11 @@ class OpenAIAgent(BaseAgent):
 
 class OllamaAgent(BaseAgent):
     """Agent for interacting with a local Ollama server."""
-
     MODEL_LLAMA3 = "llama3"
 
-    def __init__(self, model: str, host: str = "http://localhost:11434"):
-        # Ollama runs locally and does not require an API key.
+    def __init__(self, model: str, host: str, port: int):
         super().__init__(api_key=None, model=model)
-        self.host = host
+        self.host = f"http://{host}:{port}"
 
     def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
         api_url = f"{self.host}/api/chat"
@@ -359,9 +297,10 @@ class OllamaAgent(BaseAgent):
             options['top_k'] = params['top_k']
         if params.get('context_size') is not None:
             options['num_ctx'] = params['context_size']
-        # BUG FIX: Moved max_tokens logic to before the payload is created.
         if params.get('max_tokens') is not None:
             options['num_predict'] = params['max_tokens']
+        if params.get('num_thread') is not None:
+            options['num_thread'] = params['num_thread']
 
         payload = {
             "model": self.model,
@@ -374,20 +313,14 @@ class OllamaAgent(BaseAgent):
             response = requests.post(api_url, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
-
             text_response = data.get('message', {}).get('content', '')
             if not text_response:
-                fail(f"Received an empty response from Ollama. Full response: {data}")
-
+                fail(f"Received an empty response from Ollama.")
             return self.process_response(text_response)
-
         except requests.exceptions.ConnectionError:
             fail(f"Connection to Ollama server at {self.host} failed. Is Ollama running?")
         except requests.exceptions.RequestException as e:
-            error_details = f"API request to Ollama failed: {e}"
-            if e.response is not None:
-                error_details += f"\nResponse body: {e.response.text}"
-            fail(error_details)
+            fail(f"API request to Ollama failed: {e}")
         except (KeyError, IndexError) as e:
             fail(f"Failed to parse Ollama API response: {e}. Full response: {response.text}")
 
@@ -403,25 +336,22 @@ def setup_argument_parser() -> argparse.ArgumentParser:
     # --- Core Arguments ---
     parser.add_argument('prompt', type=str, help="The user's text prompt to the AI.")
     parser.add_argument('--agent', type=str, choices=['gemini', 'claude', 'openai', 'ollama'], default='gemini', help="The AI agent to use.")
-    parser.add_argument('--model', type=str, default=None, help=(
-            "The specific model to use for the selected agent.\n"
-            "If not provided, a sensible default will be used:\n"
-            "- Gemini: gemini-1.5-flash\n"
-            "- Claude: claude-3-haiku-20240307\n"
-            "- OpenAI: gpt-4o-mini\n"
-            "- Ollama: llama3"
-    ))
+    parser.add_argument('--model', type=str, default=None, help="The specific model to use for the selected agent.")
     # --- Context Arguments ---
     parser.add_argument('--history', type=str, default='[]', help="A JSON string representing the conversation history.")
-    parser.add_argument('--file', action='append', dest='files', default=[], help="Path to a file to be included as context. Can be specified multiple times.")
-    parser.add_argument('--tree', type=str, default=None, help="Path to a directory to be included as context, including its file tree and contents.")
+    parser.add_argument('--file', action='append', dest='files', default=[], help="Path to a file to be included as context.")
+    parser.add_argument('--tree', type=str, default=None, help="Path to a directory to be included as context.")
     # --- Generation Parameter Arguments ---
-    parser.add_argument('--temperature', type=float, default=None, help="Controls randomness (e.g., 0.7).")
-    parser.add_argument('--top-p', type=float, default=None, help="Nucleus sampling threshold (e.g., 1.0).")
-    parser.add_argument('--top-k', type=int, default=None, help="Filters to the top K tokens (e.g., 40).")
+    parser.add_argument('--temperature', type=float, default=None, help="Controls randomness.")
+    parser.add_argument('--top-p', type=float, default=None, help="Nucleus sampling threshold.")
+    parser.add_argument('--top-k', type=int, default=None, help="Filters to the top K tokens.")
     parser.add_argument('--max-tokens', type=int, default=None, help="Maximum number of tokens in the response.")
-    parser.add_argument('--system', type=str, default=None, help="Custom system prompt to override the default.")
+    parser.add_argument('--system', type=str, default=None, help="Custom system prompt.")
+    # --- Ollama-specific Arguments ---
     parser.add_argument('--context-size', type=int, default=None, help="Context window size in tokens (Ollama only).")
+    parser.add_argument('--num-thread', type=int, default=None, help="Number of threads for computation (Ollama only).")
+    parser.add_argument('--ollama-host', type=str, default='localhost', help="Hostname for the Ollama server.")
+    parser.add_argument('--ollama-port', type=int, default=11434, help="Port for the Ollama server.")
     
     return parser
 
@@ -431,7 +361,6 @@ def main():
     parser = setup_argument_parser()
     args = parser.parse_args()
 
-    # --- Validate Inputs ---
     try:
         history = json.loads(args.history)
         if not isinstance(history, list):
@@ -439,19 +368,12 @@ def main():
     except (json.JSONDecodeError, ValueError) as e:
         fail(f"Invalid --history argument: {e}")
 
-    # --- Prepare Prompt ---
     full_prompt = args.prompt
-    file_context = ""
-    tree_context = ""
-
     if args.files:
-        file_context = read_files_for_prompt(args.files)
+        full_prompt = read_files_for_prompt(args.files) + "\n--- USER PROMPT ---\n" + args.prompt
     if args.tree:
-        tree_context = read_tree_for_prompt(args.tree)
-    if file_context or tree_context:
-        full_prompt = f"{tree_context}{file_context}\n--- USER PROMPT ---\n{args.prompt}"
+        full_prompt = read_tree_for_prompt(args.tree) + "\n--- USER PROMPT ---\n" + args.prompt
 
-    # --- Agent Selection and Instantiation ---
     agent_map = {
         'gemini': ('GEMINI_API_KEY', GeminiAgent, GeminiAgent.MODEL_FLASH),
         'claude': ('ANTHROPIC_API_KEY', ClaudeAgent, ClaudeAgent.MODEL_HAIKU),
@@ -465,7 +387,6 @@ def main():
     env_var, agent_class, default_model = agent_map[args.agent]
     model_to_use = args.model if args.model else default_model
 
-    # --- Bundle Generation Parameters ---
     generation_params = {
         'temperature': args.temperature,
         'top_p': args.top_p,
@@ -473,34 +394,25 @@ def main():
         'max_tokens': args.max_tokens,
         'system': args.system,
         'context_size': args.context_size,
+        'num_thread': args.num_thread,
     }
 
-    agent_instance = None
     try:
-        # Handle instantiation based on whether an API key is needed
-        if env_var:
+        if args.agent == 'ollama':
+            agent = agent_class(model=model_to_use, host=args.ollama_host, port=args.ollama_port)
+        else:
             api_key = os.environ.get(env_var)
             if not api_key:
                 fail(f"Environment variable {env_var} is not set.")
-            agent_instance = agent_class(api_key=api_key, model=model_to_use)
-        else:
-            # For agents like Ollama that don't need an API key
-            agent_instance = agent_class(model=model_to_use)
+            agent = agent_class(api_key=api_key, model=model_to_use)
 
-        # --- Perform API Call ---
-        response_text, files_to_create = agent_instance.ask(full_prompt, history, generation_params)
+        response_text, files_to_create = agent.ask(full_prompt, history, generation_params)
 
-        # --- Output Success ---
-        output = {
-            "status": "success",
-            "response": response_text,
-            "files": files_to_create
-        }
+        output = {"status": "success", "response": response_text, "files": files_to_create}
         print(json.dumps(output, indent=2))
         sys.exit(0)
 
     except Exception as e:
-        # A final catch-all for any unexpected errors during agent execution.
         fail(f"An unexpected error occurred: {e}")
 
 
