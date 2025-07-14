@@ -142,8 +142,9 @@ class BaseAgent(ABC):
     An abstract base class for different AI API agents.
     It defines the common interface and implements shared functionality.
     """
-    def __init__(self, api_key: str, model: str):
-        if not api_key:
+    def __init__(self, api_key: Optional[str], model: str):
+        # API key is now optional, allowing for local agents like Ollama.
+        if self.__class__.__name__ not in ['OllamaAgent'] and not api_key:
             fail(f"API key for {self.__class__.__name__} is not set. Please set the corresponding environment variable.")
         self.api_key = api_key
         self.model = model
@@ -154,7 +155,7 @@ class BaseAgent(ABC):
         )
 
     @abstractmethod
-    def ask(self, prompt: str, history: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, str]]]:
+    def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
         """
         Sends a prompt and history to the AI and returns the response.
 
@@ -163,6 +164,7 @@ class BaseAgent(ABC):
         Args:
             prompt: The user's prompt.
             history: The conversation history.
+            params: A dictionary of generation parameters.
 
         Returns:
             A tuple containing:
@@ -203,62 +205,46 @@ class BaseAgent(ABC):
 class GeminiAgent(BaseAgent):
     """Agent for interacting with the Google Gemini API."""
 
-    # Available models for reference.
-    # MODEL_PRO = "gemini-1.5-pro-latest"
     MODEL_FLASH = "gemini-1.5-flash"
 
-    def ask(self, prompt: str, history: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, str]]]:
-        # Gemini requires a specific role mapping and content structure.
-        # "assistant" roles must be translated to "model".
+    def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
         formatted_history = []
         for item in history:
             role = "model" if item.get("role") == "assistant" else "user"
             formatted_history.append({"role": role, "parts": [{"text": item["content"]}]})
 
-        # The current prompt is the latest message from the user.
-        user_prompt = {"role": "user", "parts": [{"text": prompt}]}
+        system_prompt = params.get('system') or FILE_CREATION_INSTRUCTION
+        full_prompt_text = f"{system_prompt}\n\n---\n\n{prompt}"
+        messages = formatted_history + [{"role": "user", "parts": [{"text": full_prompt_text}]}]
 
-        # CORRECTED: System instruction is now the first part of the 'contents' list.
-        system_instruction = {
-            "role": "user",
-            "parts": [{"text": FILE_CREATION_INSTRUCTION}]
-        }
-
-        # Start with the system instruction, then history, then the current prompt.
-        # Note: The API expects alternating user/model roles. A system instruction is considered a 'user' role message.
-        # To maintain conversation flow, we place the system prompt, then the user prompt, then the history.
-        # A more robust solution might merge history intelligently. For a direct fix, this works.
-        # A simple approach is to have the system message, then the history, then the new prompt.
-        messages = [system_instruction] + formatted_history + [user_prompt]
-
+        generation_config = {}
+        if params.get('temperature') is not None:
+            generation_config['temperature'] = params['temperature']
+        if params.get('top_p') is not None:
+            generation_config['topP'] = params['top_p']
+        if params.get('top_k') is not None:
+            generation_config['topK'] = params['top_k']
+        if params.get('max_tokens') is not None:
+            generation_config['maxOutputTokens'] = params['max_tokens']
 
         api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": messages,
-            "generationConfig": {
-                "temperature": 0.7,
-                "topP": 1.0,
-                "maxOutputTokens": 8192,
-            }
+            "generationConfig": generation_config
         }
-
-        # The 'system_instruction' key is removed from the payload.
 
         try:
             response = requests.post(api_url, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
 
-            # Defensive path to access the response content
             if not data.get("candidates") or not data["candidates"][0].get("content"):
                 fail("Received an empty or invalid response from Gemini API.")
 
             text_response = data["candidates"][0]["content"]["parts"][0]["text"]
             return self.process_response(text_response)
-
         except requests.exceptions.RequestException as e:
-            # Enhanced error reporting to provide more context
             error_details = f"API request to Gemini failed: {e}"
             if e.response is not None:
                 error_details += f"\nResponse body: {e.response.text}"
@@ -270,37 +256,37 @@ class GeminiAgent(BaseAgent):
 class ClaudeAgent(BaseAgent):
     """Agent for interacting with the Anthropic Claude API."""
 
-    # Available models for reference.
-    # MODEL_OPUS = "claude-3-opus-20240229"
-    # MODEL_SONNET = "claude-3-5-sonnet-20240620"
     MODEL_HAIKU = "claude-3-haiku-20240307"
 
-    def ask(self, prompt: str, history: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, str]]]:
+    def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
         api_url = "https://api.anthropic.com/v1/messages"
         headers = {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json"
         }
-
-        # Claude's history format is directly compatible with the input.
         messages = history + [{"role": "user", "content": prompt}]
-
+        
         payload = {
             "model": self.model,
-            "system": FILE_CREATION_INSTRUCTION,
+            "system": params.get('system') or FILE_CREATION_INSTRUCTION,
             "messages": messages,
-            "max_tokens": 8192,
         }
+        
+        if params.get('temperature') is not None:
+            payload['temperature'] = params['temperature']
+        if params.get('top_p') is not None:
+            payload['top_p'] = params['top_p']
+        if params.get('max_tokens') is not None:
+            payload['max_tokens'] = params['max_tokens']
+        # BUG FIX: Removed unsupported 'top_k' parameter for Claude API.
 
         try:
             response = requests.post(api_url, headers=headers, json=payload, timeout=120)
             response.raise_for_status()
             data = response.json()
-
             text_response = "".join(block['text'] for block in data.get('content', []) if block.get('type') == 'text')
             return self.process_response(text_response)
-
         except requests.exceptions.RequestException as e:
             fail(f"API request to Anthropic failed: {e}")
         except (KeyError, IndexError) as e:
@@ -310,27 +296,78 @@ class ClaudeAgent(BaseAgent):
 class OpenAIAgent(BaseAgent):
     """Agent for interacting with the OpenAI API."""
 
-    # Available models for reference.
-    # MODEL_GPT4o = "gpt-4o"
     MODEL_GPT4o_MINI = "gpt-4o-mini"
-    # MODEL_GPT35 = "gpt-3.5-turbo"
 
-    def ask(self, prompt: str, history: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, str]]]:
+    def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
         api_url = "https://api.openai.com/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-
-        # For OpenAI, the system prompt is the first message in the list.
-        system_message = {"role": "system", "content": FILE_CREATION_INSTRUCTION}
+        system_prompt = params.get('system') or FILE_CREATION_INSTRUCTION
+        system_message = {"role": "system", "content": system_prompt}
         messages = [system_message] + history + [{"role": "user", "content": prompt}]
+        
+        payload = {
+            "model": self.model,
+            "messages": messages,
+        }
+        
+        if params.get('temperature') is not None:
+            payload['temperature'] = params['temperature']
+        if params.get('top_p') is not None:
+            payload['top_p'] = params['top_p']
+        if params.get('max_tokens') is not None:
+            payload['max_tokens'] = params['max_tokens']
+
+        try:
+            response = requests.post(api_url, headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            text_response = data['choices'][0]['message']['content']
+            return self.process_response(text_response)
+        except requests.exceptions.RequestException as e:
+            fail(f"API request to OpenAI failed: {e}")
+        except (KeyError, IndexError) as e:
+            fail(f"Failed to parse OpenAI API response: {e}. Full response: {response.text}")
+
+
+class OllamaAgent(BaseAgent):
+    """Agent for interacting with a local Ollama server."""
+
+    MODEL_LLAMA3 = "llama3"
+
+    def __init__(self, model: str, host: str = "http://localhost:11434"):
+        # Ollama runs locally and does not require an API key.
+        super().__init__(api_key=None, model=model)
+        self.host = host
+
+    def ask(self, prompt: str, history: List[Dict[str, Any]], params: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
+        api_url = f"{self.host}/api/chat"
+        headers = {"Content-Type": "application/json"}
+        
+        system_prompt = params.get('system') or FILE_CREATION_INSTRUCTION
+        system_message = {"role": "system", "content": system_prompt}
+        messages = [system_message] + history + [{"role": "user", "content": prompt}]
+        
+        options = {}
+        if params.get('temperature') is not None:
+            options['temperature'] = params['temperature']
+        if params.get('top_p') is not None:
+            options['top_p'] = params['top_p']
+        if params.get('top_k') is not None:
+            options['top_k'] = params['top_k']
+        if params.get('context_size') is not None:
+            options['num_ctx'] = params['context_size']
+        # BUG FIX: Moved max_tokens logic to before the payload is created.
+        if params.get('max_tokens') is not None:
+            options['num_predict'] = params['max_tokens']
 
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 8000,
+            "stream": False,
+            "options": options
         }
 
         try:
@@ -338,13 +375,21 @@ class OpenAIAgent(BaseAgent):
             response.raise_for_status()
             data = response.json()
 
-            text_response = data['choices'][0]['message']['content']
+            text_response = data.get('message', {}).get('content', '')
+            if not text_response:
+                fail(f"Received an empty response from Ollama. Full response: {data}")
+
             return self.process_response(text_response)
 
+        except requests.exceptions.ConnectionError:
+            fail(f"Connection to Ollama server at {self.host} failed. Is Ollama running?")
         except requests.exceptions.RequestException as e:
-            fail(f"API request to OpenAI failed: {e}")
+            error_details = f"API request to Ollama failed: {e}"
+            if e.response is not None:
+                error_details += f"\nResponse body: {e.response.text}"
+            fail(error_details)
         except (KeyError, IndexError) as e:
-            fail(f"Failed to parse OpenAI API response: {e}. Full response: {response.text}")
+            fail(f"Failed to parse Ollama API response: {e}. Full response: {response.text}")
 
 
 # --- Main Execution Logic ---
@@ -355,49 +400,29 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         description="A stateless backend for a Vim plugin to interact with AI agents.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument(
-        'prompt',
-        type=str,
-        help="The user's text prompt to the AI."
-    )
-    parser.add_argument(
-        '--agent',
-        type=str,
-        choices=['gemini', 'claude', 'openai'],
-        default='gemini',
-        help="The AI agent to use. Defaults to 'gemini'."
-    )
-    parser.add_argument(
-        '--model',
-        type=str,
-        default=None, # Default is handled dynamically based on the agent
-        help=(
+    # --- Core Arguments ---
+    parser.add_argument('prompt', type=str, help="The user's text prompt to the AI.")
+    parser.add_argument('--agent', type=str, choices=['gemini', 'claude', 'openai', 'ollama'], default='gemini', help="The AI agent to use.")
+    parser.add_argument('--model', type=str, default=None, help=(
             "The specific model to use for the selected agent.\n"
             "If not provided, a sensible default will be used:\n"
             "- Gemini: gemini-1.5-flash\n"
             "- Claude: claude-3-haiku-20240307\n"
-            "- OpenAI: gpt-4o-mini"
-        )
-    )
-    parser.add_argument(
-        '--history',
-        type=str,
-        default='[]',
-        help="A JSON string representing the conversation history. Defaults to an empty list."
-    )
-    parser.add_argument(
-        '--file',
-        action='append',
-        dest='files',
-        default=[],
-        help="Path to a file to be included as context. Can be specified multiple times."
-    )
-    parser.add_argument(
-        '--tree',
-        type=str,
-        default=None,
-        help="Path to a directory to be included as context, including its file tree and contents."
-    )
+            "- OpenAI: gpt-4o-mini\n"
+            "- Ollama: llama3"
+    ))
+    # --- Context Arguments ---
+    parser.add_argument('--history', type=str, default='[]', help="A JSON string representing the conversation history.")
+    parser.add_argument('--file', action='append', dest='files', default=[], help="Path to a file to be included as context. Can be specified multiple times.")
+    parser.add_argument('--tree', type=str, default=None, help="Path to a directory to be included as context, including its file tree and contents.")
+    # --- Generation Parameter Arguments ---
+    parser.add_argument('--temperature', type=float, default=None, help="Controls randomness (e.g., 0.7).")
+    parser.add_argument('--top-p', type=float, default=None, help="Nucleus sampling threshold (e.g., 1.0).")
+    parser.add_argument('--top-k', type=int, default=None, help="Filters to the top K tokens (e.g., 40).")
+    parser.add_argument('--max-tokens', type=int, default=None, help="Maximum number of tokens in the response.")
+    parser.add_argument('--system', type=str, default=None, help="Custom system prompt to override the default.")
+    parser.add_argument('--context-size', type=int, default=None, help="Context window size in tokens (Ollama only).")
+    
     return parser
 
 
@@ -421,11 +446,8 @@ def main():
 
     if args.files:
         file_context = read_files_for_prompt(args.files)
-
     if args.tree:
         tree_context = read_tree_for_prompt(args.tree)
-
-    # Prepend context to the main prompt if it exists
     if file_context or tree_context:
         full_prompt = f"{tree_context}{file_context}\n--- USER PROMPT ---\n{args.prompt}"
 
@@ -433,26 +455,40 @@ def main():
     agent_map = {
         'gemini': ('GEMINI_API_KEY', GeminiAgent, GeminiAgent.MODEL_FLASH),
         'claude': ('ANTHROPIC_API_KEY', ClaudeAgent, ClaudeAgent.MODEL_HAIKU),
-        'openai': ('OPENAI_API_KEY', OpenAIAgent, OpenAIAgent.MODEL_GPT4o_MINI)
+        'openai': ('OPENAI_API_KEY', OpenAIAgent, OpenAIAgent.MODEL_GPT4o_MINI),
+        'ollama': (None, OllamaAgent, OllamaAgent.MODEL_LLAMA3)
     }
 
     if args.agent not in agent_map:
         fail(f"Unknown agent '{args.agent}'.")
 
     env_var, agent_class, default_model = agent_map[args.agent]
-
-    api_key = os.environ.get(env_var)
-    if not api_key:
-        fail(f"Environment variable {env_var} is not set.")
-
-    # Use the user-specified model or the agent's default
     model_to_use = args.model if args.model else default_model
 
+    # --- Bundle Generation Parameters ---
+    generation_params = {
+        'temperature': args.temperature,
+        'top_p': args.top_p,
+        'top_k': args.top_k,
+        'max_tokens': args.max_tokens,
+        'system': args.system,
+        'context_size': args.context_size,
+    }
+
+    agent_instance = None
     try:
-        agent = agent_class(api_key=api_key, model=model_to_use)
+        # Handle instantiation based on whether an API key is needed
+        if env_var:
+            api_key = os.environ.get(env_var)
+            if not api_key:
+                fail(f"Environment variable {env_var} is not set.")
+            agent_instance = agent_class(api_key=api_key, model=model_to_use)
+        else:
+            # For agents like Ollama that don't need an API key
+            agent_instance = agent_class(model=model_to_use)
 
         # --- Perform API Call ---
-        response_text, files_to_create = agent.ask(full_prompt, history)
+        response_text, files_to_create = agent_instance.ask(full_prompt, history, generation_params)
 
         # --- Output Success ---
         output = {

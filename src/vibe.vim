@@ -1,8 +1,8 @@
 " =============================================================================
 " Filename: plugin/vibe.vim
-" Author: bsdero/Gemini 2.5
+" Author: bsdero/Gemini
 " Description: A Vim plugin frontend for the vibe_ai_backend.py script.
-" Version: 2.2 - Final Bugfix for File Creation
+" Version: 3.0 - Parameter & Alias Update
 " =============================================================================
 
 " --- Load Guard & Prerequisite Checks ---
@@ -22,14 +22,47 @@ let g:vibe_ai_default_agent = get(g:, 'vibe_ai_default_agent', 'gemini')
 let g:vibe_ai_default_model = get(g:, 'vibe_ai_default_model', '')
 let g:vibe_ai_debug = get(g:, 'vibe_ai_debug', 0)
 
+" --- New Generation Parameters ---
+let g:vibe_ai_temperature = get(g:, 'vibe_ai_temperature', '')
+let g:vibe_ai_top_p = get(g:, 'vibe_ai_top_p', '')
+let g:vibe_ai_top_k = get(g:, 'vibe_ai_top_k', '')
+let g:vibe_ai_max_tokens = get(g:, 'vibe_ai_max_tokens', '')
+let g:vibe_ai_system_prompt = get(g:, 'vibe_ai_system_prompt', '')
+let g:vibe_ai_context_size = get(g:, 'vibe_ai_context_size', '')
+
+
 " --- Custom Commands ---
 command! -nargs=+ -range Vibeask <line1>,<line2>call vibe#run('ask', <q-args>, <range>)
+command! -nargs=+ Vba <line1>,<line2>call vibe#run('ask', <q-args>, <range>)
+
 command! -nargs=+ -complete=file Vibefile call vibe#run('file', <q-args>, 0)
+command! -nargs=+ -complete=file Vbf call vibe#run('file', <q-args>, 0)
+
 command! -nargs=+ -complete=dir Vibetree call vibe#run('tree', <q-args>, 0)
+command! -nargs=+ -complete=dir Vbt call vibe#run('tree', <q-args>, 0)
+
 command! Vibecancel call vibe#cancel_job()
+command! Vbc call vibe#cancel_job()
+
 command! Vibeclearhistory call vibe#clear_history()
+command! Vbh call vibe#clear_history()
+
 command! Vibedebug call vibe#debug_history()
+command! Vbd call vibe#debug_history()
+
 command! Vibefocus call vibe#focus_history()
+command! Vbo call vibe#focus_history()
+
+" --- New Parameter Management Commands ---
+command! -nargs=1 VibeSet call vibe#set_parameter(<q-args>)
+command! -nargs=1 Vbs call vibe#set_parameter(<q-args>)
+
+command! VibeGetSettings call vibe#get_settings()
+command! Vbg call vibe#get_settings()
+
+command! -nargs=* VibeResetSettings call vibe#reset_settings(<q-args>)
+command! -nargs=* Vbr call vibe#reset_settings(<q-args>)
+
 
 " =============================================================================
 " SCRIPT-LOCAL & GLOBAL FUNCTIONS
@@ -214,6 +247,14 @@ function! vibe#run(command_type, args, range) abort
   let l:cmd = [g:vibe_ai_backend_path, '--agent=' . g:vibe_ai_default_agent]
   if !empty(g:vibe_ai_default_model) | call add(l:cmd, '--model=' . g:vibe_ai_default_model) | endif
 
+  " --- Add Generation Parameters ---
+  if !empty(g:vibe_ai_temperature) | call add(l:cmd, '--temperature=' . g:vibe_ai_temperature) | endif
+  if !empty(g:vibe_ai_top_p) | call add(l:cmd, '--top-p=' . g:vibe_ai_top_p) | endif
+  if !empty(g:vibe_ai_top_k) | call add(l:cmd, '--top-k=' . g:vibe_ai_top_k) | endif
+  if !empty(g:vibe_ai_max_tokens) | call add(l:cmd, '--max-tokens=' . g:vibe_ai_max_tokens) | endif
+  if !empty(g:vibe_ai_system_prompt) | call add(l:cmd, '--system=' . g:vibe_ai_system_prompt) | endif
+  if !empty(g:vibe_ai_context_size) | call add(l:cmd, '--context-size=' . g:vibe_ai_context_size) | endif
+
   let l:prompt = a:args
   if a:command_type ==# 'ask'
     let l:visual_selection = s:get_visual_selection(a:range)
@@ -294,5 +335,86 @@ function! vibe#focus_history() abort
   else
     let l:win_width = &columns / 3
     execute 'rightbelow vertical ' . l:win_width . ' sbuffer ' . l:bufnr
+  endif
+endfunction
+
+" --- New Parameter Management Functions ---
+
+function! vibe#set_parameter(args) abort
+  let l:parts = split(a:args, '=', 1)
+  if len(l:parts) != 2
+    echohl ErrorMsg | echom "Vibe AI: Invalid format. Use: VibeSet key=value" | echohl None
+    return
+  endif
+
+  let l:key = tolower(l:parts[0])
+  let l:value = l:parts[1]
+  
+  let l:valid_keys = {
+  \ 'temperature': 'g:vibe_ai_temperature',
+  \ 'top_p': 'g:vibe_ai_top_p',
+  \ 'top_k': 'g:vibe_ai_top_k',
+  \ 'max_tokens': 'g:vibe_ai_max_tokens',
+  \ 'system_prompt': 'g:vibe_ai_system_prompt',
+  \ 'context_size': 'g:vibe_ai_context_size',
+  \ 'agent': 'g:vibe_ai_default_agent',
+  \ 'model': 'g:vibe_ai_default_model'
+  \ }
+
+  if !has_key(l:valid_keys, l:key)
+    echohl ErrorMsg | echom "Vibe AI: Invalid key. Valid keys are: " . join(keys(l:valid_keys), ', ') | echohl None
+    return
+  endif
+
+  let l:var_name = l:valid_keys[l:key]
+  execute 'let ' . l:var_name . ' = ' . string(l:value)
+  echom "Vibe AI: Set " . l:key . " = " . l:value
+endfunction
+
+function! vibe#get_settings() abort
+  echom "--- Vibe AI Settings ---"
+  let l:settings = {
+  \ 'agent': g:vibe_ai_default_agent,
+  \ 'model': g:vibe_ai_default_model,
+  \ 'temperature': g:vibe_ai_temperature,
+  \ 'top_p': g:vibe_ai_top_p,
+  \ 'top_k': g:vibe_ai_top_k,
+  \ 'max_tokens': g:vibe_ai_max_tokens,
+  \ 'system_prompt': g:vibe_ai_system_prompt,
+  \ 'context_size': g:vibe_ai_context_size,
+  \ }
+  for [l:key, l:val] in items(l:settings)
+    echom l:key . ': ' . (empty(l:val) ? '<not set>' : l:val)
+  endfor
+endfunction
+
+function! vibe#reset_settings(args) abort
+  let l:key_to_reset = tolower(a:args)
+  
+  let l:valid_keys = {
+  \ 'temperature': 'g:vibe_ai_temperature',
+  \ 'top_p': 'g:vibe_ai_top_p',
+  \ 'top_k': 'g:vibe_ai_top_k',
+  \ 'max_tokens': 'g:vibe_ai_max_tokens',
+  \ 'system_prompt': 'g:vibe_ai_system_prompt',
+  \ 'context_size': 'g:vibe_ai_context_size',
+  \ 'agent': 'g:vibe_ai_default_agent',
+  \ 'model': 'g:vibe_ai_default_model'
+  \ }
+
+  if empty(l:key_to_reset)
+    " Reset all parameter settings
+    for l:var_name in values(l:valid_keys)
+      if l:var_name !=# 'g:vibe_ai_default_agent' " Don't reset the agent itself
+        execute 'let ' . l:var_name . ' = ""'
+      endif
+    endfor
+    echom "Vibe AI: All optional parameters have been reset."
+  elseif has_key(l:valid_keys, l:key_to_reset)
+    let l:var_name = l:valid_keys[l:key_to_reset]
+    execute 'let ' . l:var_name . ' = ""'
+    echom "Vibe AI: Reset " . l:key_to_reset
+  else
+    echohl ErrorMsg | echom "Vibe AI: Invalid key to reset." | echohl None
   endif
 endfunction
